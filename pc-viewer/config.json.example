@@ -1,0 +1,14 @@
+{
+  "openai_api_key": "sk-...",
+  "upload_adapter": "auctionworx",
+  "adapters": {
+    "auctionworx": {
+      "api_key": "...",
+      "base_url": "https://your-instance.auctionworx.com/api"
+    },
+    "platform": {
+      "api_key": "...",
+      "base_url": "https://your-custom-platform.com/api"
+    }
+  }
+}

@@ -40,7 +40,7 @@ class AppSettings {
   final bool quickDelete;
 
   AppSettings({
-    this.resolutionPreset = 'high',
+    this.resolutionPreset = 'max',
     this.thumbnailSize = 'medium',
     this.quickDelete = true,
   });

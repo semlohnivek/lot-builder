@@ -145,8 +145,12 @@ Note: Dart package names use underscores (`lot_builder`), directory name stays `
 
 ### Flutter Implementation Details
 - File storage: `path_provider` — saves to device Documents folder
-- Camera: `image_picker` package (simpler than `camera` for this use case)
+- Camera: `camera` package (embedded viewfinder, no system confirmation dialog)
 - JSON: `dart:convert` — straightforward encode/decode
+- Resolution/aspect ratio: lower presets (high, veryHigh, ultraHigh) capture 9:16 portrait;
+  `max` (full sensor) captures 3:4 portrait — preferred for product photography.
+  Default setting is `max`. Images stored as full-resolution originals; resizing
+  happens on the PC side before OpenAI analysis.
 - Folder structure on device:
   ```
   /Documents/lot-builder/
@@ -205,7 +209,11 @@ The most important stage. Visually verify every lot before analysis.
 
 - **Analyze All** — processes every lot with status `captured` or `reviewed`
 - **Analyze One** — per-lot button for re-analysis or fixes
-- Sends all images for a lot to OpenAI Vision (gpt-4o)
+- Images are resized to ~1024px on the long edge before sending (in-memory or temp file) —
+  originals are never modified. OpenAI Vision tiles at 512px, so full-res sends
+  are wasteful; 1024px gives ample detail for titles/descriptions.
+  Max resize dimension configurable in `config.json`.
+- Sends all (resized) images for a lot to OpenAI Vision (gpt-4o)
 - System prompt instructs model to return only JSON:
   ```json
   { "title": "...", "description": "..." }
@@ -326,11 +334,15 @@ Each stage is independently useful — stop at any point and it already saves ti
 │   ├── /lib
 │   │   ├── main.dart
 │   │   ├── /screens
-│   │   │   ├── home_screen.dart    # auction folder list + new auction
-│   │   │   └── capture_screen.dart # camera + next lot
+│   │   │   ├── home_screen.dart         # auction folder list + new auction
+│   │   │   ├── capture_screen.dart      # camera + next lot, zoom, flash
+│   │   │   ├── lot_preview_screen.dart  # lot/image review, notes, split, reorder
+│   │   │   ├── image_viewer_screen.dart # full-screen swipeable image viewer
+│   │   │   └── settings_screen.dart     # resolution, thumbnail size, quick-delete
 │   │   └── /services
 │   │       ├── auction_service.dart  # JSON read/write, folder management
-│   │       └── camera_service.dart   # image capture helpers
+│   │       ├── camera_service.dart   # image capture helpers
+│   │       └── settings_service.dart # app settings persistence
 │   └── pubspec.yaml
 │
 ├── /pc-viewer                      # SvelteKit local viewer

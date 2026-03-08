@@ -95,7 +95,7 @@ Future<void> _insertAndShoot(int lotIndex) async {
       MaterialPageRoute(
         builder: (_) => CaptureScreen(
           auction: _auction,
-          insertAfterIndex: lotIndex,
+          insertAfterIndex: lotIndex - 1,
         ),
       ),
     );

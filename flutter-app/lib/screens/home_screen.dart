@@ -84,6 +84,37 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _confirmDeleteAuction(AuctionFolder folder) {
+    final name = folder.displayName.isNotEmpty ? folder.displayName : folder.name;
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Auction?'),
+        content: Text(
+            'Delete "$name" and all its photos? This cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _deleteAuction(folder);
+            },
+            child: const Text('Delete',
+                style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deleteAuction(AuctionFolder folder) async {
+    await _service.deleteAuction(folder.path);
+    _load();
+  }
+
   Future<void> _openAuction(AuctionFolder folder) async {
     final auction = await _service.loadAuction(folder.path);
     if (!mounted) return;
@@ -148,6 +179,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             : null,
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () => _openAuction(folder),
+                        onLongPress: () => _confirmDeleteAuction(folder),
                       );
                     },
                   ),

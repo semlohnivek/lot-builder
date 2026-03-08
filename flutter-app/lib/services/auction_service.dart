@@ -56,7 +56,8 @@ class AuctionService {
   Future<AuctionData> createAuction({String name = ''}) async {
     final root = await rootDirectory;
     final timestamp = _timestamp();
-    final folder = Directory('${root.path}/auction_$timestamp');
+    final slug = _slugify(name).isNotEmpty ? _slugify(name) : 'auction';
+    final folder = Directory('${root.path}/${slug}_$timestamp');
     await folder.create();
 
     final auction = AuctionData(
@@ -207,6 +208,19 @@ class AuctionService {
       const JsonEncoder.withIndent('  ').convert(auction.json),
       flush: true,
     );
+  }
+
+  Future<void> deleteAuction(String folderPath) async {
+    final dir = Directory(folderPath);
+    if (await dir.exists()) await dir.delete(recursive: true);
+  }
+
+  String _slugify(String name) {
+    return name
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'-+'), '-')
+        .replaceAll(RegExp(r'^-|-$'), '');
   }
 
   String _timestamp() {

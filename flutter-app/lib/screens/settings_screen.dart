@@ -77,6 +77,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       _save(_settings!.copyWith(quickDelete: v)),
                 ),
                 _hint('When off, use long-press on a thumbnail to delete.'),
+
+                _sectionHeader('DEVICE'),
+                _DeviceIdTile(
+                  value: _settings!.deviceId,
+                  onSaved: (v) => _save(_settings!.copyWith(deviceId: v)),
+                ),
+                _hint('Used to prefix image filenames. '
+                    'Change this if multiple devices contribute to the same auction.'),
+
+                _sectionHeader('CAMERA MODE'),
+                SwitchListTile(
+                  tileColor: Colors.white,
+                  title: const Text('Use native camera (better quality)'),
+                  subtitle: const Text(
+                      'Opens Google Camera for full HDR+ processing. '
+                      'Requires one extra tap per photo to confirm.'),
+                  value: _settings!.useNativeCamera,
+                  activeThumbColor: Colors.orange,
+                  onChanged: (v) =>
+                      _save(_settings!.copyWith(useNativeCamera: v)),
+                ),
+                _hint('Off: embedded viewfinder, faster workflow. '
+                    'On: native camera quality, ~3× larger files.'),
               ],
             ),
     );
@@ -100,4 +123,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
         child: Text(text,
             style: const TextStyle(fontSize: 12, color: Colors.grey)),
       );
+}
+
+class _DeviceIdTile extends StatefulWidget {
+  final String value;
+  final void Function(String) onSaved;
+
+  const _DeviceIdTile({required this.value, required this.onSaved});
+
+  @override
+  State<_DeviceIdTile> createState() => _DeviceIdTileState();
+}
+
+class _DeviceIdTileState extends State<_DeviceIdTile> {
+  late TextEditingController _ctrl;
+  late FocusNode _focusNode;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.value);
+    _focusNode = FocusNode();
+    _focusNode.addListener(() {
+      if (!_focusNode.hasFocus) widget.onSaved(_ctrl.text.trim());
+    });
+  }
+
+  @override
+  void dispose() {
+    _focusNode.dispose();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      tileColor: Colors.white,
+      title: const Text('Device ID'),
+      subtitle: TextField(
+        controller: _ctrl,
+        focusNode: _focusNode,
+        decoration: const InputDecoration(
+          isDense: true,
+          border: InputBorder.none,
+        ),
+        style: const TextStyle(fontSize: 14),
+        onSubmitted: (v) => widget.onSaved(v.trim()),
+      ),
+    );
+  }
 }

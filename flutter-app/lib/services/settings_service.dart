@@ -38,34 +38,46 @@ class AppSettings {
   final String resolutionPreset;
   final String thumbnailSize;
   final bool quickDelete;
+  final bool useNativeCamera;
+  final String deviceId;
 
   AppSettings({
     this.resolutionPreset = 'max',
     this.thumbnailSize = 'medium',
     this.quickDelete = true,
+    this.useNativeCamera = false,
+    this.deviceId = '',
   });
 
   factory AppSettings.fromJson(Map<String, dynamic> json) => AppSettings(
-        resolutionPreset: json['resolution_preset'] as String? ?? 'high',
+        resolutionPreset: json['resolution_preset'] as String? ?? 'max',
         thumbnailSize: json['thumbnail_size'] as String? ?? 'medium',
         quickDelete: json['quick_delete'] as bool? ?? true,
+        useNativeCamera: json['use_native_camera'] as bool? ?? false,
+        deviceId: json['device_id'] as String? ?? '',
       );
 
   Map<String, dynamic> toJson() => {
         'resolution_preset': resolutionPreset,
         'thumbnail_size': thumbnailSize,
         'quick_delete': quickDelete,
+        'use_native_camera': useNativeCamera,
+        'device_id': deviceId,
       };
 
   AppSettings copyWith({
     String? resolutionPreset,
     String? thumbnailSize,
     bool? quickDelete,
+    bool? useNativeCamera,
+    String? deviceId,
   }) =>
       AppSettings(
         resolutionPreset: resolutionPreset ?? this.resolutionPreset,
         thumbnailSize: thumbnailSize ?? this.thumbnailSize,
         quickDelete: quickDelete ?? this.quickDelete,
+        useNativeCamera: useNativeCamera ?? this.useNativeCamera,
+        deviceId: deviceId ?? this.deviceId,
       );
 
   ResolutionPreset get cameraResolution {

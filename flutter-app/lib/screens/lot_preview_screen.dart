@@ -1,30 +1,30 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import '../services/auction_service.dart';
+import '../services/session_service.dart';
 import '../services/settings_service.dart';
 import 'capture_screen.dart';
 import 'image_viewer_screen.dart';
 
 class LotPreviewScreen extends StatefulWidget {
-  final AuctionData auction;
+  final SessionData session;
 
-  const LotPreviewScreen({super.key, required this.auction});
+  const LotPreviewScreen({super.key, required this.session});
 
   @override
   State<LotPreviewScreen> createState() => _LotPreviewScreenState();
 }
 
 class _LotPreviewScreenState extends State<LotPreviewScreen> {
-  final _service = AuctionService();
+  final _service = SessionService();
   final _settingsService = SettingsService();
-  late AuctionData _auction;
+  late SessionData _session;
   double _thumbSize = 95;
   bool _quickDelete = true;
 
   @override
   void initState() {
     super.initState();
-    _auction = widget.auction;
+    _session = widget.session;
     _cleanEmptyLastLot();
     _loadSettings();
   }
@@ -40,29 +40,27 @@ class _LotPreviewScreenState extends State<LotPreviewScreen> {
   }
 
   Future<void> _cleanEmptyLastLot() async {
-    final cleaned = await _service.cleanEmptyLastLot(_auction);
-    if (mounted) setState(() => _auction = cleaned);
+    final cleaned = await _service.cleanEmptyLastLot(_session);
+    if (mounted) setState(() => _session = cleaned);
   }
 
   Future<void> _deleteImage(int lotIndex, int imageIndex) async {
-    final updated = await _service.deleteImage(_auction, lotIndex, imageIndex);
-    setState(() => _auction = updated);
+    final updated = await _service.deleteImage(_session, lotIndex, imageIndex);
+    setState(() => _session = updated);
   }
 
   Future<void> _splitLot(int lotIndex, int splitAtIndex) async {
-    final updated = await _service.splitLot(_auction, lotIndex, splitAtIndex);
-    setState(() => _auction = updated);
+    final updated = await _service.splitLot(_session, lotIndex, splitAtIndex);
+    setState(() => _session = updated);
   }
 
   Future<void> _updateNotes(int lotIndex, String notes) async {
-    final updated = await _service.updateNotes(_auction, lotIndex, notes);
-    // Update local json without triggering a full rebuild
-    setState(() => _auction = updated);
+    final updated = await _service.updateNotes(_session, lotIndex, notes);
+    setState(() => _session = updated);
   }
 
   void _confirmRemoveLot(int lotIndex) {
-    final lotNum =
-        (_auction.lots[lotIndex] as Map<String, dynamic>)['sequence'] as int;
+    final lotNum = lotIndex + 1;
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -85,62 +83,62 @@ class _LotPreviewScreenState extends State<LotPreviewScreen> {
   }
 
   Future<void> _doRemoveLot(int lotIndex) async {
-    final updated = await _service.removeLot(_auction, lotIndex);
-    if (mounted) setState(() => _auction = updated);
+    final updated = await _service.removeLot(_session, lotIndex);
+    if (mounted) setState(() => _session = updated);
   }
 
-Future<void> _insertAndShoot(int lotIndex) async {
-    final result = await Navigator.push<AuctionData>(
+  Future<void> _insertAndShoot(int lotIndex) async {
+    final result = await Navigator.push<SessionData>(
       context,
       MaterialPageRoute(
         builder: (_) => CaptureScreen(
-          auction: _auction,
+          session: _session,
           insertAfterIndex: lotIndex - 1,
         ),
       ),
     );
     if (result != null && mounted) {
       final cleaned = await _service.cleanEmptyLastLot(result);
-      if (mounted) setState(() => _auction = cleaned);
+      if (mounted) setState(() => _session = cleaned);
     }
   }
 
   Future<void> _addImages(int lotIndex) async {
-    final result = await Navigator.push<AuctionData>(
+    final result = await Navigator.push<SessionData>(
       context,
       MaterialPageRoute(
         builder: (_) =>
-            CaptureScreen(auction: _auction, lockedLotIndex: lotIndex),
+            CaptureScreen(session: _session, lockedLotIndex: lotIndex),
       ),
     );
-    if (result != null && mounted) setState(() => _auction = result);
+    if (result != null && mounted) setState(() => _session = result);
   }
 
   Future<void> _addNewLot() async {
     final nav = Navigator.of(context);
-    var auction = await _service.cleanEmptyLastLot(_auction);
-    auction = await _service.addLot(auction);
+    var session = await _service.cleanEmptyLastLot(_session);
+    session = await _service.addLot(session);
     if (!mounted) return;
-    setState(() => _auction = auction);
+    setState(() => _session = session);
 
-    final result = await nav.push<AuctionData>(
-      MaterialPageRoute(builder: (_) => CaptureScreen(auction: _auction)),
+    final result = await nav.push<SessionData>(
+      MaterialPageRoute(builder: (_) => CaptureScreen(session: _session)),
     );
     if (result != null && mounted) {
       final cleaned = await _service.cleanEmptyLastLot(result);
-      if (mounted) setState(() => _auction = cleaned);
+      if (mounted) setState(() => _session = cleaned);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final lots = _auction.lots;
+    final lots = _session.lots;
 
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
         title: Text(
-            _auction.name.isNotEmpty ? _auction.name : 'Auction Preview'),
+            _session.name.isNotEmpty ? _session.name : 'Session Preview'),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
       ),
@@ -148,39 +146,38 @@ Future<void> _insertAndShoot(int lotIndex) async {
         onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
         behavior: HitTestBehavior.translucent,
         child: lots.isEmpty
-          ? const Center(
-              child: Text(
-                'No lots yet.\nTap + to start capturing.',
-                textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey, fontSize: 16),
+            ? const Center(
+                child: Text(
+                  'No lots yet.\nTap + to start capturing.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey, fontSize: 16),
+                ),
+              )
+            : ListView.separated(
+                padding: const EdgeInsets.only(top: 8, bottom: 100),
+                itemCount: lots.length,
+                separatorBuilder: (_, i) => const Divider(
+                  thickness: 2,
+                  height: 2,
+                  color: Color(0xFFDDDDDD),
+                ),
+                itemBuilder: (_, lotIndex) {
+                  return _LotItem(
+                    key: ValueKey('${_session.folderPath}_$lotIndex'),
+                    session: _session,
+                    lotIndex: lotIndex,
+                    thumbSize: _thumbSize,
+                    quickDelete: _quickDelete,
+                    onDeleteImage: (i) => _deleteImage(lotIndex, i),
+                    onSplit: (i) => _splitLot(lotIndex, i),
+                    onNotesChanged: (n) => _updateNotes(lotIndex, n),
+                    onAddImages: () => _addImages(lotIndex),
+                    onInsertAndShoot: () => _insertAndShoot(lotIndex),
+                    onRemoveLot: () => _confirmRemoveLot(lotIndex),
+                  );
+                },
               ),
-            )
-          : ListView.separated(
-              padding: const EdgeInsets.only(top: 8, bottom: 100),
-              itemCount: lots.length,
-              separatorBuilder: (_, i) => const Divider(
-                thickness: 2,
-                height: 2,
-                color: Color(0xFFDDDDDD),
-              ),
-              itemBuilder: (_, lotIndex) {
-                final lot = lots[lotIndex] as Map<String, dynamic>;
-                return _LotItem(
-                  key: ValueKey('${lot['id']}_$lotIndex'),
-                  auction: _auction,
-                  lotIndex: lotIndex,
-                  thumbSize: _thumbSize,
-                  quickDelete: _quickDelete,
-                  onDeleteImage: (i) => _deleteImage(lotIndex, i),
-                  onSplit: (i) => _splitLot(lotIndex, i),
-                  onNotesChanged: (n) => _updateNotes(lotIndex, n),
-                  onAddImages: () => _addImages(lotIndex),
-                  onInsertAndShoot: () => _insertAndShoot(lotIndex),
-                  onRemoveLot: () => _confirmRemoveLot(lotIndex),
-                );
-              },
-            ),
-        ),
+      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _addNewLot,
         backgroundColor: Colors.orange,
@@ -195,7 +192,7 @@ Future<void> _insertAndShoot(int lotIndex) async {
 // ─── Lot Item ────────────────────────────────────────────────────────────────
 
 class _LotItem extends StatefulWidget {
-  final AuctionData auction;
+  final SessionData session;
   final int lotIndex;
   final double thumbSize;
   final bool quickDelete;
@@ -208,7 +205,7 @@ class _LotItem extends StatefulWidget {
 
   const _LotItem({
     super.key,
-    required this.auction,
+    required this.session,
     required this.lotIndex,
     required this.thumbSize,
     required this.quickDelete,
@@ -230,9 +227,8 @@ class _LotItemState extends State<_LotItem> {
   @override
   void initState() {
     super.initState();
-    final lot = _lot;
     _notesCtrl =
-        TextEditingController(text: lot['notes'] as String? ?? '');
+        TextEditingController(text: _lot['notes'] as String? ?? '');
   }
 
   @override
@@ -251,12 +247,11 @@ class _LotItemState extends State<_LotItem> {
   }
 
   Map<String, dynamic> get _lot =>
-      widget.auction.lots[widget.lotIndex] as Map<String, dynamic>;
+      widget.session.lots[widget.lotIndex] as Map<String, dynamic>;
 
-  void _openViewer(List<Map> images, int initialIndex) {
+  void _openViewer(List<String> images, int initialIndex) {
     final paths = images
-        .map((img) =>
-            '${widget.auction.folderPath}/${img['filename']}')
+        .map((filename) => '${widget.session.folderPath}/$filename')
         .toList();
     Navigator.push(
       context,
@@ -272,8 +267,8 @@ class _LotItemState extends State<_LotItem> {
   @override
   Widget build(BuildContext context) {
     final lot = _lot;
-    final images = (lot['images'] as List).cast<Map>();
-    final lotNum = lot['sequence'] as int;
+    final images = (lot['images'] as List).cast<String>();
+    final lotNum = widget.lotIndex + 1;
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -297,7 +292,7 @@ class _LotItemState extends State<_LotItem> {
           ),
           const SizedBox(height: 10),
 
-          // Thumbnails with split buttons between them
+          // Thumbnails
           if (images.isEmpty)
             Text('No photos',
                 style: TextStyle(color: Colors.grey[400], fontSize: 13))
@@ -366,12 +361,11 @@ class _LotItemState extends State<_LotItem> {
     );
   }
 
-  List<Widget> _buildThumbnailsWithSplitters(List<Map> images) {
+  List<Widget> _buildThumbnailsWithSplitters(List<String> images) {
     return List.generate(
       images.length,
       (i) => _ThumbnailTile(
-        file: File(
-            '${widget.auction.folderPath}/${images[i]['filename']}'),
+        file: File('${widget.session.folderPath}/${images[i]}'),
         size: widget.thumbSize,
         showQuickDelete: widget.quickDelete,
         onTap: () => _openViewer(images, i),

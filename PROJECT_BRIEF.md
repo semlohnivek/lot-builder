@@ -68,48 +68,71 @@ No server to host, no API keys exposed on the internet.
 
 ---
 
-## The JSON — Source of Truth
+## Data Architecture — Two-Level Hierarchy
 
-Every action on phone or PC updates `auction.json`.
-This file defines the auction completely at every stage of the pipeline.
+The phone captures **sessions**. Sessions live inside **auctions**.
+The PC viewer assembles the final auction from one or more sessions.
+
+### Folder Structure on Device
+
+```
+/Documents/lot-builder/
+  spring-sale_20260309/          ← auction folder (name-first for USB readability)
+    auction.json                  ← auction metadata only
+    20260309_142500_morning/      ← session folder (timestamp-first for sort order)
+      session.json                ← source of truth for this session
+      device01_20260309_142501_234.jpg
+      device01_20260309_142502_891.jpg
+      device02_20260309_142501_445.jpg   ← second device, no filename collision
+    20260309_154000_afternoon/
+      session.json
+      device01_20260309_154012_007.jpg
+```
+
+### auction.json (minimal — metadata only)
 
 ```json
 {
-  "version": "1.0",
-  "created_at": "2026-03-07T10:00:00Z",
-  "auction": {
-    "title": "",
-    "description": "",
-    "platform_id": null
-  },
+  "name": "Spring Sale",
+  "created_at": "2026-03-09T14:25:00Z"
+}
+```
+
+### session.json (source of truth for one capture session)
+
+```json
+{
+  "version": "2.0",
+  "session_id": "sess_20260309_142500",
+  "captured_at": "2026-03-09T14:25:00Z",
+  "name": "Morning Session",
+  "device": "device01",
   "lots": [
     {
-      "id": "lot_001",
-      "sequence": 1,
-      "images": [
-        { "filename": "img_001.jpg", "platform_uuid": null },
-        { "filename": "img_002.jpg", "platform_uuid": null }
-      ],
-      "ai_title": null,
-      "ai_description": null,
-      "title": null,
-      "description": null,
-      "notes": "",
-      "platform_lot_id": null,
-      "status": "captured"
+      "images": ["device01_20260309_142501_234.jpg", "device01_20260309_142502_891.jpg"],
+      "notes": ""
+    },
+    {
+      "images": ["device01_20260309_142615_123.jpg"],
+      "notes": "chipped on base"
     }
   ]
 }
 ```
 
-### Key JSON Design Decisions
-- `platform_id`, `platform_uuid`, `platform_lot_id` — generic names, not AW-specific.
-  The active adapter populates these with whatever IDs the target platform returns.
-- Partial upload failures are always resumable — adapter checks existing IDs before
-  creating anything, never duplicates.
-- JSON is written to disk after every change — app crash or browser close loses nothing.
+### Key Design Decisions
+- **No lot IDs or sequence numbers** — array index is the sequence; derived fields
+  reduce complexity when deleting, splitting, and inserting lots.
+- **Image filenames** — `deviceId_YYYYMMDD_HHMMSS_mmm.jpg`. Timestamp with milliseconds
+  guarantees global uniqueness even across simultaneous captures on multiple devices.
+  Enables safe folder flattening at import time with zero collision risk.
+- **Session folders sort chronologically** — timestamp-first naming ensures correct
+  order even after deletions and additions.
+- **JSON written after every change** — app crash loses nothing.
+- **Platform fields absent from phone JSON** — PC viewer adds `ai_title`,
+  `ai_description`, `platform_lot_id`, etc. at review/analysis time.
 
-### Lot Status Pipeline
+### PC-Side Lot Status Pipeline
 ```
 captured → analyzed → reviewed → uploaded
 ```
@@ -122,57 +145,66 @@ captured → analyzed → reviewed → uploaded
 - Android (primary). Flutter = free iOS build later with zero code changes.
 - Android Studio already installed. USB testing ready.
 
+### Role — Session Recorder (not auction builder)
+The phone captures **sessions**. It has no knowledge of the final auction structure,
+lot numbering, titles, or descriptions. That assembly happens on the PC.
+
 ### Core Workflow
-1. Open app → **New Auction** → creates `auction.json` + timestamped folder
-2. Point camera at lot → take photos (multiple per lot)
-3. **Next Lot** → closes current lot, starts new one
-4. Repeat until all lots captured
-5. USB transfer folder to PC
+1. Open app → **Auctions** list → **New Auction** (names the folder)
+2. Open auction → **Sessions** list → **New Session** (names the session)
+3. Camera opens → take photos per lot → tap **Next Lot** to advance
+4. **Lot Preview** screen — review thumbnails, split lots, delete photos, add notes
+5. USB-transfer the auction folder to PC
 
 ### What the App Intentionally Does NOT Do
 - No internet required — fully offline
 - No API calls of any kind
-- No titles, descriptions, or lot numbers — PC viewer's job
-- No image processing — raw photos only
+- No AI titles or descriptions — PC viewer's job
 - No platform knowledge whatsoever
 
-### Scaffold Command
-Run from inside `lot-builder/` once Flutter is in PATH:
-```bash
-flutter create --project-name lot_builder flutter-app
+### Flutter Dependencies
+```yaml
+path_provider: ^2.1.0          # device filesystem paths
+camera: ^0.11.0                # embedded viewfinder
+image_picker: ^1.1.0           # native camera mode (optional, higher quality)
+permission_handler: ^11.0.0    # storage permission (Android)
+sensors_plus: ^4.0.0           # accelerometer for capture orientation
 ```
-Note: Dart package names use underscores (`lot_builder`), directory name stays `flutter-app`.
 
-### Flutter Implementation Details
-- File storage: `path_provider` — saves to device Documents folder
-- Camera: `camera` package (embedded viewfinder, no system confirmation dialog)
-- JSON: `dart:convert` — straightforward encode/decode
-- Resolution/aspect ratio: lower presets (high, veryHigh, ultraHigh) capture 9:16 portrait;
-  `max` (full sensor) captures 3:4 portrait — preferred for product photography.
-  Default setting is `max`. Images stored as full-resolution originals; resizing
-  happens on the PC side before OpenAI analysis.
-- Folder structure on device:
-  ```
-  /Documents/lot-builder/
-    /auction_20260307_142500/    ← timestamp = unique, supports multiple auctions
-      auction.json
-      img_001.jpg
-      img_002.jpg
-      img_003.jpg
-      ...
-  ```
+### Camera Modes (user-configurable in Settings)
+- **Embedded viewfinder** (default) — faster workflow, one tap per photo
+- **Native camera** — opens Google Camera, full HDR+ processing, ~3× larger files,
+  requires one confirmation tap per photo. Configured via `useNativeCamera` toggle.
 
-### UI — Intentionally Minimal
-- Home screen: list of existing auction folders + "New Auction" button
-- Capture screen: full-screen camera viewfinder, shutter button, "Next Lot" button,
-  current lot number + photo count display
-- No nav, no settings, no complexity — this is a capture tool
+### Image Quality Note
+- Resolution preset: `max` (full sensor, typically 3:4 portrait on Pixel 7 Pro = ~12 MP)
+- Lower presets yield 16:9 crops (less useful for product photos)
+- Images should be resized before sending to OpenAI Vision on the PC side
+  (full-sensor files are unnecessarily large for AI analysis)
+
+### Capture Orientation
+The phone UI is locked to portrait, but photos are saved with correct EXIF orientation
+regardless of how the phone is physically held. An accelerometer listener tracks the
+physical orientation at capture time, applies `lockCaptureOrientation()` for the
+snapshot only, then immediately releases it so the preview is unaffected.
+
+### Screens
+| Screen | Purpose |
+|---|---|
+| `HomeScreen` | Auction folder list + new auction. Forces device ID setup on first launch. |
+| `AuctionScreen` | Session list within an auction + new session. |
+| `CaptureScreen` | Full-screen camera, shutter, Next Lot, photo strip, lot number animation. |
+| `LotPreviewScreen` | Thumbnail grid per lot, split lots, delete photos, notes, insert lots. |
+| `SettingsScreen` | Image quality, thumbnail size, quick-delete toggle, device ID, camera mode. |
+| `DeviceSetupScreen` | Non-dismissible first-launch screen to set device ID. |
+
+### Device ID
+Each device must have a unique ID (e.g. `device01`, `device02`). The ID is prefixed to
+every photo filename. Multiple devices can contribute to the same auction session folder
+without filename collisions. Set on first launch; changeable in Settings.
 
 ### Post-MVP Additions
 - Wireless transfer over local WiFi (same network as PC)
-- Quick notes field per lot before tapping Next Lot
-- Swipe left to delete last photo
-- Thumbnail review strip showing photos taken for current lot
 
 ---
 
@@ -185,7 +217,14 @@ npm run dev
 # Open browser to localhost:5173
 ```
 User selects their auction folder via a folder picker.
-Viewer reads `auction.json` and renders all lot images from disk.
+Viewer reads all `session.json` files from sub-folders, merges the lots into a single
+working auction view, and renders images from disk.
+
+### Import Step (at folder open)
+1. Walk auction folder → find all `session.json` files
+2. Merge lots from all sessions into a flat, ordered list
+3. Image paths = `sessionFolder/filename` (no flattening needed — sessions stay separate)
+4. Build working `auction.json` in memory (or save to disk for persistence)
 
 ---
 
@@ -209,11 +248,7 @@ The most important stage. Visually verify every lot before analysis.
 
 - **Analyze All** — processes every lot with status `captured` or `reviewed`
 - **Analyze One** — per-lot button for re-analysis or fixes
-- Images are resized to ~1024px on the long edge before sending (in-memory or temp file) —
-  originals are never modified. OpenAI Vision tiles at 512px, so full-res sends
-  are wasteful; 1024px gives ample detail for titles/descriptions.
-  Max resize dimension configurable in `config.json`.
-- Sends all (resized) images for a lot to OpenAI Vision (gpt-4o)
+- Sends all images for a lot to OpenAI Vision (gpt-4o)
 - System prompt instructs model to return only JSON:
   ```json
   { "title": "...", "description": "..." }
@@ -238,10 +273,10 @@ Every upload adapter implements this single function:
 // /src/lib/upload/adapter-interface.js
 /**
  * Upload a complete auction to a platform.
- * @param {Object} auctionJson  — the full auction.json object
+ * @param {Object} auctionJson  — merged working auction object (built from session.json files)
  * @param {string} folderPath   — absolute path to the auction folder (for reading images)
  * @param {Object} config       — platform credentials from config.json
- * @param {Function} onProgress — callback(lotId, step, status) for UI updates
+ * @param {Function} onProgress — callback(lotIndex, step, status) for UI updates
  * @returns {Object}            — updated auctionJson with platform IDs populated
  */
 export async function uploadAuction(auctionJson, folderPath, config, onProgress) {}
@@ -330,19 +365,20 @@ Each stage is independently useful — stop at any point and it already saves ti
 ```
 /lot-builder
 │
-├── /flutter-app                    # Flutter phone app
+├── /flutter-app                    # Flutter phone app (Android)
 │   ├── /lib
 │   │   ├── main.dart
 │   │   ├── /screens
-│   │   │   ├── home_screen.dart         # auction folder list + new auction
-│   │   │   ├── capture_screen.dart      # camera + next lot, zoom, flash
-│   │   │   ├── lot_preview_screen.dart  # lot/image review, notes, split, reorder
-│   │   │   ├── image_viewer_screen.dart # full-screen swipeable image viewer
-│   │   │   └── settings_screen.dart     # resolution, thumbnail size, quick-delete
+│   │   │   ├── home_screen.dart         # auction list + new auction
+│   │   │   ├── auction_screen.dart      # session list within auction
+│   │   │   ├── capture_screen.dart      # camera viewfinder + lot controls
+│   │   │   ├── lot_preview_screen.dart  # review/split/delete per lot
+│   │   │   ├── settings_screen.dart     # quality, device ID, camera mode
+│   │   │   └── device_setup_screen.dart # first-launch device ID setup
 │   │   └── /services
-│   │       ├── auction_service.dart  # JSON read/write, folder management
-│   │       ├── camera_service.dart   # image capture helpers
-│   │       └── settings_service.dart # app settings persistence
+│   │       ├── session_service.dart  # auction/session/lot/image CRUD + JSON
+│   │       ├── settings_service.dart # app settings persistence
+│   │       └── camera_service.dart   # camera init, capture helpers
 │   └── pubspec.yaml
 │
 ├── /pc-viewer                      # SvelteKit local viewer

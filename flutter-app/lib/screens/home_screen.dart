@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import '../services/auction_service.dart';
-import 'capture_screen.dart';
-import 'lot_preview_screen.dart';
+import '../services/session_service.dart';
+import '../services/settings_service.dart';
+import 'auction_screen.dart';
+import 'device_setup_screen.dart';
 import 'settings_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -12,7 +13,8 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final _service = AuctionService();
+  final _service = SessionService();
+  final _settingsService = SettingsService();
   List<AuctionFolder> _auctions = [];
   bool _loading = true;
 
@@ -24,6 +26,13 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _init() async {
     await _service.requestStoragePermission();
+    final settings = await _settingsService.load();
+    if (settings.deviceId.isEmpty && mounted) {
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const DeviceSetupScreen()),
+      );
+    }
     _load();
   }
 
@@ -38,22 +47,12 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _newAuction() async {
     final name = await _promptName();
     if (name == null || !mounted) return;
-    final auction = await _service.createAuction(name: name);
+    final folder = await _service.createAuction(name: name);
     if (!mounted) return;
-
-    // Go straight to capture for new auctions
-    final result = await Navigator.push<AuctionData>(
+    await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => CaptureScreen(auction: auction)),
+      MaterialPageRoute(builder: (_) => AuctionScreen(folder: folder)),
     );
-
-    // After capture, go to lot preview if anything was captured
-    if (result != null && result.lots.isNotEmpty && mounted) {
-      await Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => LotPreviewScreen(auction: result)),
-      );
-    }
     _load();
   }
 
@@ -85,13 +84,14 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _confirmDeleteAuction(AuctionFolder folder) {
-    final name = folder.displayName.isNotEmpty ? folder.displayName : folder.name;
+    final name =
+        folder.displayName.isNotEmpty ? folder.displayName : folder.name;
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Delete Auction?'),
         content: Text(
-            'Delete "$name" and all its photos? This cannot be undone.'),
+            'Delete "$name" and all its sessions and photos? This cannot be undone.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
@@ -102,8 +102,8 @@ class _HomeScreenState extends State<HomeScreen> {
               Navigator.pop(ctx);
               _deleteAuction(folder);
             },
-            child: const Text('Delete',
-                style: TextStyle(color: Colors.red)),
+            child:
+                const Text('Delete', style: TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -116,11 +116,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _openAuction(AuctionFolder folder) async {
-    final auction = await _service.loadAuction(folder.path);
-    if (!mounted) return;
     await Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => LotPreviewScreen(auction: auction)),
+      MaterialPageRoute(builder: (_) => AuctionScreen(folder: folder)),
     );
     _load();
   }
@@ -129,7 +127,16 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Lot Builder'),
+        leading: const Icon(Icons.home, color: Colors.white54),
+        title: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Lot Builder',
+                style: TextStyle(fontSize: 13, color: Colors.white54)),
+            Text('Auctions',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+          ],
+        ),
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         actions: [
@@ -173,10 +180,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               ? folder.displayName
                               : folder.name,
                         ),
-                        subtitle: folder.displayName.isNotEmpty
-                            ? Text(folder.name,
-                                style: const TextStyle(fontSize: 11))
-                            : null,
                         trailing: const Icon(Icons.chevron_right),
                         onTap: () => _openAuction(folder),
                         onLongPress: () => _confirmDeleteAuction(folder),

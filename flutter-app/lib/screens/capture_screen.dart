@@ -1,14 +1,17 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
-import '../services/auction_service.dart';
+import 'package:sensors_plus/sensors_plus.dart';
+import '../services/session_service.dart';
 import '../services/camera_service.dart';
 import '../services/settings_service.dart';
 
 class CaptureScreen extends StatefulWidget {
-  final AuctionData auction;
+  final SessionData session;
 
   /// When set, captures are added to this specific lot. Next Lot is hidden.
   final int? lockedLotIndex;
@@ -18,7 +21,7 @@ class CaptureScreen extends StatefulWidget {
 
   const CaptureScreen({
     super.key,
-    required this.auction,
+    required this.session,
     this.lockedLotIndex,
     this.insertAfterIndex,
   });
@@ -28,15 +31,17 @@ class CaptureScreen extends StatefulWidget {
 }
 
 class _CaptureScreenState extends State<CaptureScreen>
-    with WidgetsBindingObserver {
+    with WidgetsBindingObserver, SingleTickerProviderStateMixin {
   final _camera = CameraService();
-  final _service = AuctionService();
+  final _service = SessionService();
   final _settings = SettingsService();
-  late AuctionData _auction;
+  late SessionData _session;
+  String _deviceId = 'device01';
 
   bool _capturing = false;
   bool _cameraReady = false;
   bool _initializing = false;
+  bool _useNativeCamera = false;
   String? _error;
 
   // Insert mode: tracks which lot index is currently active
@@ -54,17 +59,43 @@ class _CaptureScreenState extends State<CaptureScreen>
   // Strip scroll
   final _stripScroll = ScrollController();
 
+  // Orientation
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+  DeviceOrientation _captureOrientation = DeviceOrientation.portraitUp;
+
+  // Lot number animation
+  late AnimationController _lotNumController;
+  late Animation<double> _lotNumScale;
+  late Animation<Color?> _lotNumColor;
+
   @override
   void initState() {
     super.initState();
+    _lotNumController = AnimationController(
+      duration: const Duration(milliseconds: 700),
+      vsync: this,
+    );
+    _lotNumScale = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 1.0, end: 1.8), weight: 30),
+      TweenSequenceItem(tween: Tween(begin: 1.8, end: 1.0), weight: 70),
+    ]).animate(CurvedAnimation(
+        parent: _lotNumController, curve: Curves.easeInOut));
+    _lotNumColor = TweenSequence<Color?>([
+      TweenSequenceItem<Color?>(
+          tween: ColorTween(begin: Colors.white, end: Colors.orange),
+          weight: 30),
+      TweenSequenceItem<Color?>(
+          tween: ColorTween(begin: Colors.orange, end: Colors.white),
+          weight: 70),
+    ]).animate(_lotNumController);
     WidgetsBinding.instance.addObserver(this);
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-    _auction = widget.auction;
+    _session = widget.session;
 
     if (widget.insertAfterIndex != null) {
       _setupInsertMode();
-    } else if (widget.lockedLotIndex == null && _auction.lots.isEmpty) {
+    } else if (widget.lockedLotIndex == null && _session.lots.isEmpty) {
       _addFirstLot();
     }
 
@@ -73,19 +104,33 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   Future<void> _setupInsertMode() async {
     final updated =
-        await _service.insertLot(_auction, widget.insertAfterIndex!);
+        await _service.insertLot(_session, widget.insertAfterIndex!);
     _insertPosition = widget.insertAfterIndex! + 1;
-    if (mounted) setState(() => _auction = updated);
+    if (mounted) setState(() => _session = updated);
   }
 
   Future<void> _addFirstLot() async {
-    final updated = await _service.addLot(_auction);
-    if (mounted) setState(() => _auction = updated);
+    final updated = await _service.addLot(_session);
+    if (mounted) setState(() => _session = updated);
   }
 
   Future<void> _initCamera() async {
     if (_initializing) return;
     _initializing = true;
+
+    final appSettings = await _settings.load();
+    if (mounted) setState(() => _deviceId = appSettings.deviceId);
+
+    if (appSettings.useNativeCamera) {
+      if (mounted) {
+        setState(() {
+          _useNativeCamera = true;
+          _cameraReady = true;
+        });
+      }
+      _initializing = false;
+      return;
+    }
 
     final status = await Permission.camera.request();
     if (!status.isGranted) {
@@ -98,13 +143,14 @@ class _CaptureScreenState extends State<CaptureScreen>
     }
 
     try {
-      final appSettings = await _settings.load();
       await _camera.initialize(preset: appSettings.cameraResolution);
       if (mounted) {
         _minZoom = await _camera.controller!.getMinZoomLevel();
         _maxZoom = await _camera.controller!.getMaxZoomLevel();
         await _camera.controller!.setFlashMode(_flashMode);
         setState(() => _cameraReady = true);
+        _startOrientationListener();
+        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollStripToEnd());
       }
     } on CameraException catch (e) {
       if (mounted) setState(() => _error = 'Camera error: ${e.description}');
@@ -114,6 +160,7 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_useNativeCamera) return;
     if (state == AppLifecycleState.inactive && _cameraReady) {
       _camera.dispose();
       setState(() => _cameraReady = false);
@@ -124,6 +171,8 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   @override
   void dispose() {
+    _lotNumController.dispose();
+    _accelSub?.cancel();
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     WidgetsBinding.instance.removeObserver(this);
     _camera.dispose();
@@ -133,27 +182,54 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   Future<void> _takePhoto() async {
     if (_capturing || !_cameraReady) return;
+    if (_useNativeCamera) {
+      await _takePhotoNative();
+      return;
+    }
     setState(() => _capturing = true);
     try {
-      final filename = _service.nextImageFilename(_auction);
-      final path = await _camera.takePicture(_auction.folderPath, filename);
+      await _camera.controller!.lockCaptureOrientation(_captureOrientation);
+      final filename = _service.nextImageFilename(_deviceId);
+      final path = await _camera.takePicture(_session.folderPath, filename);
+      await _camera.controller!.unlockCaptureOrientation();
       if (path != null) {
         final updated =
-            await _service.addImage(_auction, _activeLotIndex, filename);
-        setState(() => _auction = updated);
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (_stripScroll.hasClients) {
-            _stripScroll.animateTo(
-              _stripScroll.position.maxScrollExtent,
-              duration: const Duration(milliseconds: 200),
-              curve: Curves.easeOut,
-            );
-          }
-        });
+            await _service.addImage(_session, _activeLotIndex, filename);
+        setState(() => _session = updated);
+        _scrollStripToEnd();
       }
     } finally {
-      setState(() => _capturing = false);
+      if (mounted) setState(() => _capturing = false);
     }
+  }
+
+  Future<void> _takePhotoNative() async {
+    setState(() => _capturing = true);
+    try {
+      while (mounted) {
+        final xfile = await ImagePicker().pickImage(source: ImageSource.camera);
+        if (xfile == null || !mounted) break;
+        final filename = _service.nextImageFilename(_deviceId);
+        await File(xfile.path).copy('${_session.folderPath}/$filename');
+        final updated =
+            await _service.addImage(_session, _activeLotIndex, filename);
+        if (mounted) setState(() => _session = updated);
+      }
+    } finally {
+      if (mounted) setState(() => _capturing = false);
+    }
+  }
+
+  void _scrollStripToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_stripScroll.hasClients) {
+        _stripScroll.animateTo(
+          _stripScroll.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   Future<void> _nextLot() async {
@@ -167,14 +243,15 @@ class _CaptureScreenState extends State<CaptureScreen>
     if (_insertPosition != null) {
       // Insert mode: insert next lot immediately after current position
       final updated =
-          await _service.insertLot(_auction, _insertPosition!);
+          await _service.insertLot(_session, _insertPosition!);
       _insertPosition = _insertPosition! + 1;
-      setState(() => _auction = updated);
+      setState(() => _session = updated);
     } else {
       // Normal mode: append to end
-      final updated = await _service.addLot(_auction);
-      setState(() => _auction = updated);
+      final updated = await _service.addLot(_session);
+      setState(() => _session = updated);
     }
+    _lotNumController.forward(from: 0);
   }
 
   Future<void> _toggleFlash() async {
@@ -207,19 +284,15 @@ class _CaptureScreenState extends State<CaptureScreen>
   int get _activeLotIndex {
     if (_insertPosition != null) return _insertPosition!;
     if (widget.lockedLotIndex != null) return widget.lockedLotIndex!;
-    return _auction.currentLotIndex;
+    return _session.currentLotIndex;
   }
 
   Map<String, dynamic>? get _activeLot =>
-      _activeLotIndex >= 0 && _activeLotIndex < _auction.lots.length
-          ? _auction.lots[_activeLotIndex] as Map<String, dynamic>
+      _activeLotIndex >= 0 && _activeLotIndex < _session.lots.length
+          ? _session.lots[_activeLotIndex] as Map<String, dynamic>
           : null;
 
-  int get _lotNumber {
-    final lot = _activeLot;
-    if (lot != null) return lot['sequence'] as int;
-    return _activeLotIndex + 1;
-  }
+  int get _lotNumber => _activeLotIndex + 1;
 
   int get _photoCount =>
       _activeLot == null ? 0 : (_activeLot!['images'] as List).length;
@@ -231,7 +304,7 @@ class _CaptureScreenState extends State<CaptureScreen>
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
-        if (!didPop) Navigator.pop(context, _auction);
+        if (!didPop) Navigator.pop(context, _session);
       },
       child: Scaffold(
         backgroundColor: Colors.black,
@@ -240,13 +313,22 @@ class _CaptureScreenState extends State<CaptureScreen>
           foregroundColor: Colors.white,
           leading: IconButton(
             icon: const Icon(Icons.check),
-            onPressed: () => Navigator.pop(context, _auction),
+            onPressed: () => Navigator.pop(context, _session),
           ),
-          title: Text(_inInsertMode
-              ? 'Lot $_lotNumber  ·  inserting'
-              : 'Lot $_lotNumber'),
+          title: AnimatedBuilder(
+            animation: _lotNumController,
+            builder: (context, _) => Transform.scale(
+              scale: _lotNumScale.value,
+              child: Text(
+                _inInsertMode
+                    ? 'Lot $_lotNumber  ·  inserting'
+                    : 'Lot $_lotNumber',
+                style: TextStyle(color: _lotNumColor.value),
+              ),
+            ),
+          ),
           actions: [
-            if (_cameraReady)
+            if (_cameraReady && !_useNativeCamera)
               IconButton(
                 icon: Icon(
                   _flashMode == FlashMode.off
@@ -286,13 +368,20 @@ class _CaptureScreenState extends State<CaptureScreen>
                 ? const Center(
                     child:
                         CircularProgressIndicator(color: Colors.white))
+                : _useNativeCamera
+                ? _buildNativeCameraBody()
                 : Stack(
                     fit: StackFit.expand,
                     children: [
-                      GestureDetector(
-                        onScaleStart: _onScaleStart,
-                        onScaleUpdate: _onScaleUpdate,
-                        child: CameraPreview(_camera.controller!),
+                      Center(
+                        child: AspectRatio(
+                          aspectRatio: 1.0 / _camera.controller!.value.aspectRatio,
+                          child: GestureDetector(
+                            onScaleStart: _onScaleStart,
+                            onScaleUpdate: _onScaleUpdate,
+                            child: CameraPreview(_camera.controller!),
+                          ),
+                        ),
                       ),
                       // Thumbnail strip — always at top
                       Positioned(
@@ -303,7 +392,7 @@ class _CaptureScreenState extends State<CaptureScreen>
                       ),
                       // Photo count
                       Positioned(
-                        top: _photoCount > 0 ? 108 : 12,
+                        top: _photoCount > 0 ? 100 : 12,
                         left: 0,
                         right: 0,
                         child: Text(
@@ -344,6 +433,52 @@ class _CaptureScreenState extends State<CaptureScreen>
                     ],
                   ),
       ),
+    );
+  }
+
+  void _startOrientationListener() {
+    _accelSub = accelerometerEventStream().listen((event) {
+      const threshold = 5.0;
+      if (event.x.abs() > threshold && event.x.abs() > event.y.abs()) {
+        _captureOrientation = event.x > 0
+            ? DeviceOrientation.landscapeLeft
+            : DeviceOrientation.landscapeRight;
+      } else if (event.y.abs() > threshold && event.y.abs() > event.x.abs()) {
+        _captureOrientation = DeviceOrientation.portraitUp;
+      }
+      // ambiguous angle — keep last known orientation
+    });
+  }
+
+  Widget _buildNativeCameraBody() {
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Positioned(
+          top: 0, left: 0, right: 0,
+          child: _buildPhotoStrip(),
+        ),
+        Positioned(
+          top: _photoCount > 0 ? 108 : 12,
+          left: 0,
+          right: 0,
+          child: Text(
+            _photoCount == 0
+                ? 'Tap to photograph'
+                : '$_photoCount photo${_photoCount == 1 ? '' : 's'}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 13,
+              shadows: [Shadow(color: Colors.black, blurRadius: 6)],
+            ),
+          ),
+        ),
+        Positioned(
+          bottom: 48, left: 0, right: 0,
+          child: Center(child: _buildShutterButton()),
+        ),
+      ],
     );
   }
 
@@ -415,7 +550,7 @@ class _CaptureScreenState extends State<CaptureScreen>
 
   Widget _buildPhotoStrip() {
     if (_activeLot == null || _photoCount == 0) return const SizedBox.shrink();
-    final images = (_activeLot!['images'] as List).cast<Map>();
+    final images = (_activeLot!['images'] as List).cast<String>();
     return Container(
       color: Colors.black54,
       height: 100,
@@ -427,11 +562,10 @@ class _CaptureScreenState extends State<CaptureScreen>
         itemCount: images.length,
         separatorBuilder: (_, i) => const SizedBox(width: 6),
         itemBuilder: (_, i) {
-          final filename = images[i]['filename'] as String;
           return ClipRRect(
             borderRadius: BorderRadius.circular(6),
             child: Image.file(
-              File('${_auction.folderPath}/$filename'),
+              File('${_session.folderPath}/${images[i]}'),
               width: 80,
               height: 80,
               fit: BoxFit.cover,
